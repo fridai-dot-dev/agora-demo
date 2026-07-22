@@ -1,0 +1,132 @@
+# Agora — public demo bundle.
+#
+# A single-machine docker-compose stack that boots a pre-analyzed Agora
+# engagement (1,643 public Emirates reviews) with a stripped, credential-
+# rotated seed. This is the exact compose shape shipped in the public
+# github.com/fridai-dot-dev/agora-demo repo (see ../README.md for the repo's
+# public-facing quickstart).
+#
+# Derived from deploy/docker-compose.engagement.yml (the real per-engagement
+# shape) with these differences:
+#   - Images are the two public GHCR tags (sanitized: the real themefinder
+#     pipeline package is not present in these images — see
+#     deploy/demo-bundle/build-demo-images.sh for how they're built).
+#   - No worker service: the demo data is already fully analyzed; nothing
+#     queues new pipeline jobs against it (there is no GOOGLE_API_KEY here
+#     to run one anyway).
+#   - No Caddy edge / external "agora-edge" network: this stack stands
+#     alone and publishes the frontend directly on localhost:3000.
+#   - Postgres seeds itself on first boot via docker-entrypoint-initdb.d
+#     (see ./seed/) instead of via new-engagement.sh's provisioning flow.
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17-bookworm
+    environment:
+      POSTGRES_DB: consultation_analyser
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: agora-demo-local # local sandbox only — viewer's own machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Postgres's official entrypoint auto-runs every .sql/.sql.gz/.sh file
+      # in this directory, alphabetically, against a FRESH data directory
+      # only (i.e. only when pgdata is empty on first boot). If you re-run
+      # `up` against a volume from a previous session, this does NOT re-run —
+      # `docker compose down -v` first for a truly fresh restore.
+      - ./seed:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/fridai-dot-dev/agora-demo-backend:latest
+    # The image's default CMD (scripts/core/start.sh) is the AWS-Secrets-
+    # Manager production path and also hits a broken venv/bin/* console-
+    # script shim in this image (venv/bin/django-admin, venv/bin/gunicorn
+    # both "not found" — always go through venv/bin/python instead).
+    # start-deployed.sh is the correct entrypoint for compose-injected env
+    # vars with no AWS involved — mirrors deploy/docker-compose.engagement.yml.
+    command: sh ./scripts/core/start-deployed.sh
+    environment:
+      # NOT settings.deployed (despite this being the "real per-engagement"
+      # module) — deliberate deviation, verified by testing both:
+      # settings.deployed hardcodes CSRF_TRUSTED_ORIGINS = ["https://" +
+      # DOMAIN_NAME], which can never equal "http://localhost:3000" (wrong
+      # scheme, wrong port) no matter what DOMAIN_NAME is set to. It's
+      # designed for the real per-engagement topology (a Caddy edge doing
+      # TLS + X-Forwarded-Host), which this standalone bundle doesn't have.
+      # With settings.deployed, a real browser's login form POST is
+      # rejected with Django's generic "CSRF verification failed" 403 —
+      # confirmed by hand during this task's verification.
+      # settings.local is what the image itself defaults to (see this
+      # repo's root Dockerfile: `ENV DJANGO_SETTINGS_MODULE=
+      # 'consultation_analyser.settings.local'`, and it force-installs
+      # django-extensions specifically because settings.local needs it) —
+      # it never overrides base.py's CSRF_TRUSTED_ORIGINS, which already
+      # hardcodes "http://localhost:3000", and it never sets
+      # SESSION_COOKIE_SECURE/CSRF_COOKIE_SECURE, so cookies work over
+      # plain HTTP for any browser hitting this bundle. Genuinely the
+      # better-fitting settings module for this topology, not a workaround.
+      DJANGO_SETTINGS_MODULE: consultation_analyser.settings.local
+      DEBUG: "False"
+      ENVIRONMENT: deployed
+      # Local-only, inert — never a real secret and never reused anywhere else.
+      DJANGO_SECRET_KEY: demo-bundle-not-secret-local-only
+      DATABASE_URL: postgresql://postgres:agora-demo-local@postgres:5432/consultation_analyser
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # No LLM provider on purpose: the shipped image's themefinder package
+      # is an inert stub (see build-demo-images.sh) and the demo data is
+      # already fully analyzed — nothing here ever calls out to an LLM.
+      # GOOGLE_API_KEY: intentionally unset
+      # Outbound email: intentionally unset (no SMTP in this bundle).
+      # Safe because MFA_ENABLED defaults to False (see settings/base.py) —
+      # a fresh deployment never needs outbound email just to let the demo
+      # viewer log in.
+      PILOT_MODE: "false"
+    volumes:
+      - app_data:/usr/src/app/app_data
+      - upload_staging:/usr/src/app/upload_staging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s # first boot runs migrate + collectstatic
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/fridai-dot-dev/agora-demo-frontend:latest
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+      BRAND_TITLE: Agora
+      PILOT_MODE: "false"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  app_data:
+  upload_staging:
