@@ -22,9 +22,15 @@ cd agora-demo
 docker compose up -d
 ```
 
-First boot takes a minute or two — Postgres restores the seed data, then
-Django runs migrations and starts. Watch it with `docker compose logs -f backend`
-if you want to see progress; `docker compose ps` shows `healthy` once it's ready.
+First run takes several minutes, not a minute or two — most of it is pulling
+the two images (~3.4 GB combined), then Postgres restores the seed data and
+Django runs migrations. Measured clean-machine wall clock (`git clone` to a
+working login, cold local image cache): **~4–6 minutes** on a normal
+connection; a slower line or a host with none of the shared base layers
+already cached may take longer. Watch it with `docker compose logs -f backend`
+if you want to see progress; `docker compose ps` shows `healthy` once it's
+ready. Subsequent restarts (`docker compose up -d` again, images already
+local) take well under a minute.
 
 Then open **http://localhost:3000** and sign in:
 
