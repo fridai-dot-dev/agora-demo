@@ -81,7 +81,6 @@ and its result is stored in the bundle's seed data.
 
 ## Want the full thing?
 
-This is a sample of Agora once analysis is complete. For a live pipeline
-against your own data, or a walkthrough of the
-full analysis workflow, see [agora.fridai.dev](https://agora.fridai.dev) or
-get in touch.
+This is a sample of Agora once analysis is complete. For a walkthrough of
+the full analysis workflow see [agora.fridai.dev](https://agora.fridai.dev);
+to talk about running it against your own data, get in touch.
